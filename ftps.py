@@ -20,7 +20,7 @@ from forktps.Helpers import *
 np.set_printoptions(precision=4,suppress=False)
 #### parameter section
 h5_in = 'FeAlN_delta_inp_rot_999_10k.h5'
-h5_out = 'FeAlN_nb9.h5'
+h5_out = 'ftps.h5'
 gfstruct = [ ['up',[0,1,2,3,4]], ['dn',[0,1,2,3,4]]]
 
 hyb_diag = True
@@ -37,7 +37,7 @@ dc_N = 6.5
 
 # FTPS solver parameters
 
-Nb = 9  # number of bath sites
+Nb = 20  # number of bath sites
 bath_gap = [-1.8,2.4]
 eta = 0.05 # broadening
 nw = 5001
@@ -82,8 +82,8 @@ def calc_dc_kanamori(U, J, n, M):
     """
     dc_pot = np.identity(M)
 
-    val = (U + (M - 1) * (U - 2.0 * J) + (M - 1)
-          * (U - 3.0 * J)) / (2 * M - 1) * (n - 0.5)
+    val = (U + (M - 1.0) * (U - 2.0 * J) + (M - 1.0)
+          * (U - 3.0 * J)) / (2 * M - 1.0) * (n - 0.5)
 
     dc_pot *= val
 
@@ -91,11 +91,10 @@ def calc_dc_kanamori(U, J, n, M):
 
 
 # read input delta from given h5 archive
-if mpi.is_master_node():
-    with HDFArchive(h5_in,'r') as ar:
-        delta_in = ar['DMFT_input']['delta'][0]
-        atomic_levels = ar['DMFT_input']['atomic_levels'][0]
-        den_mat_dft = ar['DMFT_input']['den_mat_dft']
+with HDFArchive(h5_in,'r') as ar:
+    delta_in = ar['DMFT_input']['delta'][0]
+    atomic_levels = ar['DMFT_input']['atomic_levels'][0]
+    den_mat_dft = ar['DMFT_input']['den_mat_dft']
 
 # create input delta for solver with correct up / down block names
 # (need to be named up / down)
