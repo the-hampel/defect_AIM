@@ -9,21 +9,27 @@ import triqs.utility.mpi as mpi
 
 from triqs.operators import *
 from triqs.operators.util.observables import *
-from triqs.operators.util.U_matrix import U_matrix, transform_U_matrix
-from triqs.operators.util.hamiltonians import h_int_slater, make_operator_real
+from triqs.operators.util.U_matrix import U_matrix, transform_U_matrix,U_matrix_kanamori
+from triqs.operators.util.hamiltonians import h_int_slater, make_operator_real, h_int_kanamori, h_int_density
 from triqs.gf import *
 from triqs.atom_diag import AtomDiag, quantum_number_eigenvalues, atomic_g_w, atomic_density_matrix, trace_rho_op
 
 ################################################
 ### parameter section
-h5_input = '/mnt/home/ahampel/work/defect/FeAlN/proj_run_tet_555/vasp.h5'
-block_structure_h5 = '/mnt/home/ahampel/work/defect/FeAlN/run_test/rot_den/vasp.h5'
-mu_init = 0.004132
-U = 4.0
-J = 0.7
+h5_input = '/mnt/home/ahampel/work/defect/FeAlN/proj_run_tet_999/vasp.h5'
+block_structure_h5 = '/mnt/home/ahampel/work/defect/FeAlN/run_test/rot_den_999/vasp.h5'
+mu_init = 0.005722
+
+h_int_type = 'kan'
+h_int_offdiag = False
+# keep off diag elements in hloc?
+h_loc_0_offidag = False
+
+U = 4.143
+J = 0.714
 
 # adjust mu to obtain 6 electron
-mu =14
+mu = 14.5
 # U=3 : mu=14
 # U=4 : mu=18
 # U=5 : mu=24
@@ -32,7 +38,7 @@ spin_names = ['up','down']
 beta = 200
 
 store_h5 = True
-store_h5_file = 'imp_diag.h5'
+store_h5_file = 'imp_diag_kan.h5'
 
 ################################################
 
@@ -146,7 +152,7 @@ sum_k.block_structure = block_s
 
 # workaround since the old dfttools did not save the corr_to_inequiv variable correctly
 sum_k.corr_to_inequiv = corr_to_inequiv
-rot_mat = rot_mat_den
+sum_k.rot_mat = rot_mat_den
 
 # set an empty sigma into sumk
 broadening = 0.01
@@ -196,15 +202,26 @@ for s in spin_names:
 if not 'Hloc_0' in locals():
     mpi.report('calculating local Hamiltonian')
     atomic_levels = sum_k.eff_atomic_levels()[0]
+    for name, matrix in atomic_levels.items():
+        if not h_loc_0_offidag:
+            matrix = np.diag(np.diag(matrix.real))
+        mpi.report(matrix.real)
 
     # Make noniteracting operator
     Hloc_0=Operator()
     for spin in spin_names:
         for o1 in orb_names:
-            for o2 in orb_names:
-                Hloc_0 += atomic_levels[spin][o1,o2] * (c_dag(spin,o1) * c(spin,o2)
+            if h_loc_0_offidag:
+                for o2 in orb_names:
+                    Hloc_0 += atomic_levels[spin][o1,o2] * (c_dag(spin,o1) * c(spin,o2)
                                                        +c_dag(spin,o2) * c(spin,o1)
                                                        )
+            else:
+                o2 = o1
+                Hloc_0 += atomic_levels[spin][o1,o2] * (c_dag(spin,o1) * c(spin,o2)
+                                                   +c_dag(spin,o2) * c(spin,o1)
+                                                   )
+
     Hloc_0 += (-mu) *N
 
 
@@ -218,14 +235,27 @@ if store_h5 and mpi.is_master_node():
 
 # construct interaction matrix
 if not 'Hint' in locals():
-    mpi.report('setting up slater Hamiltonian')
-    Umat_full = U_matrix(l=2, U_int=U, J_hund=J, basis='cubic')
+    if h_int_type == 'slater':
+        mpi.report('setting up slater Hamiltonian')
+        Umat_full = U_matrix(l=2, U_int=U, J_hund=J, basis='cubic')
 
-    # rotate to den mat diag basis
-    Umat_full_rotated = transform_U_matrix(Umat_full, sum_k.rot_mat[0].T)
+        # rotate to den mat diag basis
+        Umat_full_rotated = transform_U_matrix(Umat_full, sum_k.rot_mat[0].T)
 
-    # create interaction Hamiltonian
-    Hint = h_int_slater(spin_names, orb_names, off_diag=True, U_matrix=Umat_full_rotated)
+        # create interaction Hamiltonian
+        Hint = h_int_slater(spin_names, orb_names, off_diag=True, U_matrix=Umat_full_rotated)
+    elif h_int_type == 'kan':
+        mpi.report('setting up Kanamori Hamiltonian')
+        Umat, Upmat = U_matrix_kanamori(n_orb=n_orb, U_int=U, J_hund=J)
+
+        # create interaction Hamiltonian
+        if h_int_offdiag:
+            mpi.report('... with spin-flip and pair-hopping')
+            Hint = h_int_kanamori(spin_names, orb_names,
+                                          off_diag=True, U=Umat, Uprime=Upmat, J_hund=J)
+        else:
+            mpi.report('... only den den terms')
+            Hint = h_int_density(spin_names, orb_names,off_diag=True, U=Umat, Uprime=Upmat)
 
     # store data obtained
     if store_h5 and mpi.is_master_node():
@@ -272,12 +302,12 @@ if store_h5 and mpi.is_master_node():
 
 # Atomic Green's functions
 gf_struct = [['down',orb_names],['up',orb_names]]
-G_w = atomic_g_w(atom_diag, beta, gf_struct, (-10, 10), 5001, 0.01)
+G_w = atomic_g_w(atom_diag, beta, gf_struct, (-10, 10), 5001, 0.001)
 
 # store G_w
 if store_h5 and mpi.is_master_node():
     with HDFArchive(store_h5_file,'a') as ar:
         ar['G_w'] = G_w.copy()
 
-
+mpi.report('all steps finished, exiting.')
 
